@@ -266,6 +266,11 @@ func buildRequestFailoverPool(model, routedAuthID string, routedStorage []byte, 
 		}
 	}
 	rateModel = resolveUpstreamModel(model, hint, attrs)
+	// Pool on: one candidate pool across both realms, each attempt resolving
+	// the model against the realm of the account that sends it.
+	if modelPoolEnabled.Load() {
+		return buildModelPoolFailoverPool(rateModel, routedAuthID, routedStorage), routedStorage, nil
+	}
 	if realm == "" {
 		return buildBareFailoverPool(routedAuthID, rateModel, routedStorage), routedStorage, nil
 	}
@@ -281,6 +286,54 @@ func authInRealm(sa *storedAuth, realm string) bool {
 		return !isCNAuth(sa)
 	}
 	return isCNAuth(sa)
+}
+
+// buildModelPoolFailoverPool lists every enabled account of both realms. The
+// routed pick stays first (session affinity and the host's choice are hints);
+// cooldown and model eligibility are decided per candidate by admission and by
+// applyModelPoolCandidates. If the host list is unavailable only the routed
+// account remains.
+func buildModelPoolFailoverPool(model, routedAuthID string, routedStorage []byte) *failoverPool {
+	var routedAuth *storedAuth
+	if len(routedStorage) > 0 {
+		routedAuth, _ = parseStored(routedStorage)
+	}
+	routedName := ""
+	if routedAuthID != "" {
+		routedName = "workbuddy-" + routedAuthID + ".json"
+	}
+	matchesRouted := func(f pluginapi.HostAuthFileEntry) bool {
+		return routedAuthID != "" && (f.AuthIndex == routedAuthID || f.ID == routedAuthID ||
+			f.Name == routedAuthID || listEntryMatchesUID(f, routedAuthID, routedName))
+	}
+	pool := &failoverPool{}
+	files, err := loadAuthList()
+	if err == nil {
+		for _, f := range files {
+			if listAuthEntryDisabled(f) || f.AuthIndex == "" {
+				continue
+			}
+			cand := &failoverCandidate{AuthID: f.AuthIndex, RecordID: f.ID, Aliases: []string{f.Name}, RateModel: model}
+			if sa, getErr := authGetSource(f.AuthIndex); getErr == nil {
+				cand.Auth = sa
+			} else if matchesRouted(f) {
+				cand.Auth = routedAuth
+			}
+			if cand.Auth == nil {
+				continue
+			}
+			if matchesRouted(f) {
+				pool.Primary = cand
+				continue
+			}
+			pool.Others = append(pool.Others, cand)
+		}
+	}
+	if pool.Primary == nil && routedAuthID != "" && routedAuth != nil {
+		// Routed account missing from the list (just added / bridge edge).
+		pool.Primary = &failoverCandidate{AuthID: routedAuthID, RecordID: routedAuthID, Auth: routedAuth, RateModel: model}
+	}
+	return pool
 }
 
 func realmLabel(realm string) string {

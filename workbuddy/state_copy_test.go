@@ -60,6 +60,7 @@ func TestLoadStateCopiesEveryField(t *testing.T) {
 		},
 		TrialClaimed: map[string]bool{"auth-two": true},
 		CacheTrace:   boolPtr(true),
+		ModelPool:    boolPtr(true),
 	}
 
 	raw, err := json.MarshalIndent(&want, "", "  ")
@@ -112,5 +113,8 @@ func TestLoadStateCopiesEveryField(t *testing.T) {
 	}
 	if again.CacheTrace == nil || !*again.CacheTrace {
 		t.Error("loadState returned a live reference to CacheTrace: mutating it changed the cache")
+	}
+	if again.ModelPool == nil || !*again.ModelPool {
+		t.Error("loadState returned a live reference to ModelPool: mutating it changed the cache")
 	}
 }

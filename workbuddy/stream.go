@@ -90,18 +90,19 @@ func pumpWithFailover(ctx context.Context, cancel context.CancelFunc, req execut
 	defer closeOnce()
 
 	collector := &sseUsageCollector{}
-	realm := mmPrefixRealm(req.Model)
+	realm := ""
 	if sa, err := parseStored(req.StorageJSON); err == nil {
-		realm = accountRegion(sa)
+		realm = modelPoolRealmKey(sa)
 	}
 	fin := runStreamFailoverForSession(cands, requestSessionKey(req.ExecutorRequest, body, realm), func(cand *failoverCandidate) (bool, int, error) {
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointChatFor(cand.Auth), bytes.NewReader(body))
+		attemptBody, attemptModel := requestAttempt(cand, req.ExecutorRequest, body, upstreamModel)
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointChatFor(cand.Auth), bytes.NewReader(attemptBody))
 		if err != nil {
 			return false, 0, err
 		}
 		backendHeaders(httpReq, cand.Auth)
 		trace.beginAttempt(httpReq, cand.AuthID)
-		return pumpAttempt(httpReq, streamID, sseFramed, req.Model, upstreamModel, cand.AuthID, candUID(cand, authUID), started, collector, trace)
+		return pumpAttempt(httpReq, streamID, sseFramed, req.Model, attemptModel, cand.AuthID, candUID(cand, authUID), started, collector, trace)
 	}, ctx)
 
 	switch fin.Outcome {

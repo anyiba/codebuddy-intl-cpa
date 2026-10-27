@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Unified model pool across Global and CN (panel button)
+
+- New panel switch **聚合模型池（国际 + 国内）** (Unified model pool, persisted
+  in `workbuddy-state.json`, `GET/POST /plugins/workbuddy/modelpool/config`).
+  While it is ON, one model ID is served by every enabled account of both
+  realms: `cn/deepseek-v4.1-flash` may be answered by a Global account, and a
+  Global-prefixed ID by a CN account. Prefixes keep working as selectors but no
+  longer lock a request to one realm, and the prefix is stripped against the
+  realm of the account that actually sends the request.
+- A model is only sent to an account whose realm lists it (a CN-only ID never
+  reaches a Global account), and an ID no realm lists is rejected with a 400
+  before any account is picked.
+- Off by default: without the switch, routing is unchanged (prefix binds the
+  realm and only that realm's accounts can serve or take over the request).
+
 ### Busy routed account no longer empties the realm pool
 
 - The host picks an account before the plugin runs and does not skip busy

@@ -44,7 +44,7 @@ func TestExecutorUpstreamErrorsPreserveHTTPStatus(t *testing.T) {
 			return err
 		}},
 		{"collected-stream", func() error {
-			_, _, err := collectStreamAttempt(payload, cand, true, &sseUsageCollector{})
+			_, _, err := collectStreamAttempt(payload, "deepseek-v4.1-flash", cand, true, &sseUsageCollector{})
 			return err
 		}},
 		{"async-stream", func() error {

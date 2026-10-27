@@ -53,7 +53,7 @@ func TestProgressOnlyStreamsFailAllExecutorPaths(t *testing.T) {
 			return err
 		}},
 		{"collected-stream", func() error {
-			_, _, err := collectStreamAttempt([]byte(`{}`), cand, true, &sseUsageCollector{})
+			_, _, err := collectStreamAttempt([]byte(`{}`), "fixture", cand, true, &sseUsageCollector{})
 			return err
 		}},
 		{"async-stream", func() error {

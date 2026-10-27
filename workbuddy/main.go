@@ -881,6 +881,11 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
+	// With the cross-realm pool on, an unknown model is rejected before any
+	// candidate is picked (it was never resolvable on the routed realm either).
+	if err := validateModelPool(req.Model); err != nil {
+		return nil, err
+	}
 	pool, routedStorage, err := buildRequestFailoverPool(req.Model, req.AuthID, req.StorageJSON, req.AuthAttributes)
 	if err != nil {
 		return nil, err
@@ -912,10 +917,11 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	// same request is retried on the next eligible enabled account. One usage
 	// record per inbound request (success or final failure); the CPAMP publish
 	// follows the same single-line rule.
-	cands := pool.ordered(req.StorageJSON)
+	cands := poolCandidates(req.Model, pool.ordered(req.StorageJSON))
 	var completion []byte
-	fin := runFailoverForSession(cands, requestSessionKey(req, body, accountRegion(sa)), func(cand *failoverCandidate) (attemptOutcome, int, string, error) {
-		out, err := upstreamAttempt(context.Background(), body, req.Model, cand, trace)
+	fin := runFailoverForSession(cands, requestSessionKey(req, body, modelPoolRealmKey(sa)), func(cand *failoverCandidate) (attemptOutcome, int, string, error) {
+		attemptBody, attemptModel := requestAttempt(cand, req, body, upstreamModel)
+		out, err := upstreamAttempt(context.Background(), attemptBody, attemptModel, cand, trace)
 		completion = out // nil on error
 		return classifyNonStream(out, err)
 	})
@@ -957,6 +963,11 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
+	// With the cross-realm pool on, an unknown model is rejected before any
+	// candidate is picked (it was never resolvable on the routed realm either).
+	if err := validateModelPool(req.Model); err != nil {
+		return nil, err
+	}
 	pool, routedStorage, err := buildRequestFailoverPool(req.Model, req.AuthID, req.StorageJSON, req.AuthAttributes)
 	if err != nil {
 		return nil, err
@@ -984,14 +995,15 @@ func handleExecStream(raw []byte) ([]byte, error) {
 
 	// No async stream id → fall back to synchronous chunk collection.
 	if req.StreamID == "" {
-		cands := pool.ordered(req.StorageJSON)
+		cands := poolCandidates(req.Model, pool.ordered(req.StorageJSON))
 		collector := &sseUsageCollector{}
 		var chunks []pluginapi.ExecutorStreamChunk
 		partial := false
-		fin := runFailoverForSession(cands, requestSessionKey(req.ExecutorRequest, body, accountRegion(sa)), func(cand *failoverCandidate) (attemptOutcome, int, string, error) {
+		fin := runFailoverForSession(cands, requestSessionKey(req.ExecutorRequest, body, modelPoolRealmKey(sa)), func(cand *failoverCandidate) (attemptOutcome, int, string, error) {
 			var statusCode int
 			var err error
-			chunks, statusCode, err = collectStreamAttempt(body, cand, sseFramed, collector, trace)
+			attemptBody, attemptModel := requestAttempt(cand, req.ExecutorRequest, body, upstreamModel)
+			chunks, statusCode, err = collectStreamAttempt(attemptBody, attemptModel, cand, sseFramed, collector, trace)
 			if err != nil {
 				if len(chunks) > 0 {
 					// Partial data already collected — the sync path returns it
@@ -1048,15 +1060,26 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	// client disconnects — otherwise the pump keeps reading a dead upstream until
 	// sharedHTTPClient's 120s timeout, holding a pool slot the whole time.
 	ctx, cancel := context.WithCancel(context.Background())
-	cands := pool.ordered(req.StorageJSON)
+	cands := poolCandidates(req.Model, pool.ordered(req.StorageJSON))
 	go pumpWithFailover(ctx, cancel, req, body, upstreamModel, authUID, started, sseFramed, cands, trace)
 	return okEnvelope(streamResponse{Headers: headers})
+}
+
+// requestAttempt returns the body and model ID one attempt must send. With the
+// cross-realm pool on the ID is the candidate's own-realm resolution of the
+// requested model (the body is rewritten accordingly); otherwise the request
+// body is reused untouched.
+func requestAttempt(cand *failoverCandidate, req pluginapi.ExecutorRequest, body []byte, upstreamModel string) ([]byte, string) {
+	if !modelPoolEnabled.Load() || cand == nil || cand.RateModel == "" || cand.RateModel == upstreamModel {
+		return body, upstreamModel
+	}
+	return prepareUpstreamBody(req.Payload, req.OriginalRequest, cand.Auth, cand.RateModel), cand.RateModel
 }
 
 // collectStreamAttempt runs one synchronous upstream stream attempt against
 // cand, cleaning chunks through the collector. Mirrors the legacy
 // collectUpstreamStream body, parameterized by candidate.
-func collectStreamAttempt(body []byte, cand *failoverCandidate, sseFramed bool, collector *sseUsageCollector, traces ...*requestCacheTrace) ([]pluginapi.ExecutorStreamChunk, int, error) {
+func collectStreamAttempt(body []byte, upstreamModel string, cand *failoverCandidate, sseFramed bool, collector *sseUsageCollector, traces ...*requestCacheTrace) ([]pluginapi.ExecutorStreamChunk, int, error) {
 	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(cand.Auth), bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err

@@ -703,6 +703,9 @@ type wbStateFile struct {
 	// pro-only model away from a free account instead of learning from a 11158
 	// refusal every time. Same keying as Warnings.
 	Tiers map[string]accountTierRec `json:"tiers,omitempty"`
+	// ModelPool is the panel's cross-realm model-pool switch (one model served
+	// by every CN and Global account). nil = never toggled = off.
+	ModelPool *bool `json:"model_pool,omitempty"`
 }
 
 // rememberTrialClaimed persists the fact that an account already used the
@@ -856,6 +859,7 @@ func loadState() (wbStateFile, error) {
 		CacheTrace:   cloneBoolPtr(state.CacheTrace),
 		Warnings:     cloneAccountWarnings(state.Warnings),
 		Tiers:        cloneAccountTiers(state.Tiers),
+		ModelPool:    cloneBoolPtr(state.ModelPool),
 	}
 	for k, v := range state.Realm {
 		out.Realm[k] = cloneSettings(v)

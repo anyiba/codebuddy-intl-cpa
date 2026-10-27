@@ -266,6 +266,7 @@ func configure(raw []byte) {
 
 	// Cache tracing: explicit panel choice (workbuddy-state.json) > env default.
 	applyCacheTracePreference()
+	applyModelPoolPreference()
 
 	// oauth_region: config_yaml > env WB_OAUTH_REGION > default (intl). The
 	// region decides which realm issues the login URL; see
