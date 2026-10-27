@@ -130,6 +130,13 @@ func buildBareFailoverPool(routedAuthID, model string, primaryStorage ...[]byte)
 	// credential (or the reverse) cannot succeed and may expose a request to the
 	// wrong account pool. Resolve the routed storage first and keep only peers
 	// from the same CN/Global realm.
+	//
+	// An unroutable account must not narrow the pool: the host picks the account
+	// before the plugin sees the request and does NOT skip busy ones, so when its
+	// pick has no slot or is cooling, every other account of that realm is the
+	// failover pool. Requiring the routed identity to be present made that pool
+	// empty exactly when it was needed ("all accounts busy"). Unsure routed realm
+	// (no storage, unknown account) keeps the old "no peers" behaviour.
 	var routedAuth *storedAuth
 	routedMatched := false
 	for _, f := range files {
@@ -151,8 +158,20 @@ func buildBareFailoverPool(routedAuthID, model string, primaryStorage ...[]byte)
 			routedAuth = sa
 		}
 	}
-	routedRealmKnown := routedAuth != nil
-	routedGlobal := routedRealmKnown && isGlobalDomain(routedAuth.Auth.Domain)
+	// The routed realm is authoritative. Without any routed storage, fall back
+	// to the model prefix (same rule as buildRequestFailoverPool), else "" = no
+	// narrowing.
+	routedRealmKnown, routedGlobal := routedAuth != nil, false
+	if routedRealmKnown {
+		routedGlobal = isGlobalDomain(routedAuth.Auth.Domain)
+	} else {
+		switch mmPrefixRealm(model) {
+		case realmGlobal:
+			routedRealmKnown, routedGlobal = true, true
+		case realmCN:
+			routedRealmKnown = true
+		}
+	}
 	for _, f := range files {
 		if listAuthEntryDisabled(f) || f.AuthIndex == "" {
 			continue
@@ -170,7 +189,7 @@ func buildBareFailoverPool(routedAuthID, model string, primaryStorage ...[]byte)
 			if cand.Auth == nil {
 				// The routed candidate can still use the executor's storage
 				// snapshot, but an unresolved peer must not cross a known realm.
-				if !isRouted {
+				if !isRouted || routedAuth == nil {
 					continue
 				}
 				cand.Auth = routedAuth
@@ -195,12 +214,12 @@ func buildBareFailoverPool(routedAuthID, model string, primaryStorage ...[]byte)
 		}
 		pool.Others = append(pool.Others, cand)
 	}
-	if pool.Primary == nil && !routedMatched {
+	if pool.Primary == nil && !routedMatched && routedAuthID != "" {
 		// Routed account missing from the list (just added / bridge edge) —
 		// synthesize so at least the first attempt happens with the storage
 		// the executor already carries. When the list did contain the account,
 		// an excluded/disabled/cooldown primary must stay excluded.
-		primary := &failoverCandidate{AuthID: routedAuthID, RecordID: routedAuthID}
+		primary := &failoverCandidate{AuthID: routedAuthID, RecordID: routedAuthID, Auth: routedAuth}
 		if len(primaryStorage) > 0 && len(primaryStorage[0]) > 0 {
 			if sa, parseErr := parseStored(primaryStorage[0]); parseErr == nil {
 				primary.Auth = sa

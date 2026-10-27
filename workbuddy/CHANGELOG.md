@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Busy routed account no longer empties the realm pool
+
+- The host picks an account before the plugin runs and does not skip busy
+  ones. When its pick held both of its 2 slots, the plugin's peer search was
+  limited to that account, so the request failed with "all accounts busy"
+  while idle accounts of the same realm went unused. The executor now prepends
+  the busy pick (admitted only if a slot freed meanwhile) to the failover list.
+- Failover candidates for an account the plugin cannot resolve now come from
+  its whole CN or Global pool (realm taken from the model prefix), instead of
+  being synthesized from that single account. Realms still never mix.
+
 ## 0.10.0
 
 ### Global traffic can move to the other Intl host when `codebuddy.ai` is blocked (issue #14)

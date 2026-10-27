@@ -141,7 +141,9 @@ panel.html → /v0/management/plugins/workbuddy/accounts
    across sessions, so a failover in one conversation moved another
    conversation onto an unrelated account and re-wrote its prompt cache.
    Bindings persist to `session-affinity.json` so a restart does not move a
-   conversation.
+   conversation. Because the host does not skip busy accounts, the routed pick
+   is only a hint: the failover list is the pick plus every free same-realm
+   account, and a busy pick is skipped without sending a request.
 
 7. **No goroutine leaks across hot-reload.** The scheduler loop uses a
    `schedulerStop` channel and is idempotent. The plugin's `Shutdown` is a
