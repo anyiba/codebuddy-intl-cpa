@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Global import with an empty domain is no longer billed as CN
+
+- Flat Global exports omit `domain` and `uid`. Refresh and chat treated that as
+  a CN account and called `codebuddy.cn`, which rejects the Global token, so
+  the panel showed the account as failed. An empty domain now follows the
+  token issuer, and import fills `domain` plus `uid` from the token.
+
+
+### Importing a second account no longer replaces the first
+
+- A credential with an empty `uid` was saved as the legacy `workbuddy.json`.
+  CPA stores one account per file, so the next import overwrote that file.
+  The file name now uses the access token's account id (`sub`) when `uid` is
+  empty, and import only merges a file when it is the same account.
+
+
 ### Unified model pool across Global and CN (panel button)
 
 - New panel switch **聚合模型池（国际 + 国内）** (Unified model pool, persisted

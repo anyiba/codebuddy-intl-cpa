@@ -633,6 +633,17 @@ func parseStored(raw []byte) (*storedAuth, error) {
 	if sa.Auth.AccessToken == "" {
 		return nil, fmt.Errorf("parse_error: missing accessToken")
 	}
+	// Flat exports often omit domain and uid. The token issuer is the realm,
+	// and sub is the account id. Filling them here is what routes billing and
+	// chat to the Global host instead of codebuddy.cn.
+	if strings.TrimSpace(sa.Auth.Domain) == "" && isGlobalToken(sa.Auth.AccessToken) {
+		sa.Auth.Domain = "www.workbuddy.ai"
+	}
+	if strings.TrimSpace(sa.Account.UID) == "" {
+		if sub := jwtSubject(sa.Auth.AccessToken); sub != "" {
+			sa.Account.UID = sub
+		}
+	}
 	// Keep the original document so AuthData and later import/refresh saves do
 	// not discard provider-specific fields unknown to storedAuth.
 	sa.rawJSON = append([]byte(nil), raw...)
@@ -701,7 +712,7 @@ func commonHeaders(req *http.Request) {
 // account's domain. Global accounts use https://www.workbuddy.ai; CN (and
 // legacy auth files with empty domain) use the default https://www.codebuddy.cn.
 func originRefererFor(sa *storedAuth) string {
-	if sa != nil && isGlobalDomain(sa.Auth.Domain) {
+	if authIsGlobal(sa) {
 		return originRefererGlobal
 	}
 	return originReferer
@@ -711,7 +722,7 @@ func originRefererFor(sa *storedAuth) string {
 // Global JWT iss is workbuddy.ai — those tokens only work on www.workbuddy.ai.
 // CN tokens work on copilot.tencent.com. Mixing them yields APISIX 401.
 func upstreamBaseFor(sa *storedAuth) string {
-	if sa != nil && isGlobalDomain(sa.Auth.Domain) {
+	if authIsGlobal(sa) {
 		return upstreamBaseGlobal
 	}
 	return upstreamBaseCN
@@ -854,9 +865,12 @@ func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool) pluginapi
 	id := providerName
 	fileName := authFileName
 	if sa != nil {
-		if uid := sanitizeUIDForFileName(sa.Account.UID); uid != "" {
-			id = uid
-			fileName = "workbuddy-" + uid + ".json"
+		fileName = authFileNameFor(sa)
+		switch {
+		case sanitizeUIDForFileName(sa.Account.UID) != "":
+			id = sanitizeUIDForFileName(sa.Account.UID)
+		case sanitizeUIDForFileName(jwtSubject(sa.Auth.AccessToken)) != "":
+			id = sanitizeUIDForFileName(jwtSubject(sa.Auth.AccessToken))
 		}
 	}
 	label := labelForAuth(sa)

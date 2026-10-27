@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"encoding/base64"
+	"testing"
+)
 
 func TestIsGlobalDomain(t *testing.T) {
 	cases := []struct {
@@ -37,6 +40,7 @@ func TestAccountRegion(t *testing.T) {
 	}{
 		{"nil", nil, "cn"},
 		{"empty domain", &storedAuth{}, "cn"},
+		{"empty domain, Global token", &storedAuth{Auth: storedTokens{AccessToken: globalTestToken()}}, "global"},
 		{"CN domain", &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.cn"}}, "cn"},
 		{"Global domain", &storedAuth{Auth: storedTokens{Domain: "www.workbuddy.ai"}}, "global"},
 	}
@@ -55,6 +59,7 @@ func TestBillingBaseFor(t *testing.T) {
 	}{
 		{"nil", nil, billingBase},
 		{"empty domain", &storedAuth{}, billingBase},
+			{"empty domain, Global token", &storedAuth{Auth: storedTokens{AccessToken: globalTestToken()}}, billingBaseGlobal},
 		{"CN domain", &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.cn"}}, billingBase},
 		{"Global domain", &storedAuth{Auth: storedTokens{Domain: "www.workbuddy.ai"}}, billingBaseGlobal},
 	}
@@ -62,6 +67,22 @@ func TestBillingBaseFor(t *testing.T) {
 		if got := billingBaseFor(tc.sa); got != tc.want {
 			t.Errorf("%s: billingBaseFor() = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+func globalTestToken() string {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"https://www.workbuddy.ai/auth/realms/copilot","sub":"acct-1"}`))
+	return "h." + payload + ".s"
+}
+
+func TestParseStoredFillsGlobalRealmFromToken(t *testing.T) {
+	raw := []byte(`{"accessToken":"` + globalTestToken() + `","domain":"","uid":""}`)
+	sa, err := parseStored(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accountRegion(sa) != "global" || sa.Auth.Domain == "" || sa.Account.UID != "acct-1" {
+		t.Fatalf("region=%s domain=%q uid=%q", accountRegion(sa), sa.Auth.Domain, sa.Account.UID)
 	}
 }
 

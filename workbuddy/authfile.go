@@ -6,6 +6,9 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -34,10 +37,17 @@ func sanitizeUIDForFileName(uid string) string {
 }
 
 func authFileNameFor(sa *storedAuth) string {
-	if sa != nil {
-		if uid := sanitizeUIDForFileName(sa.Account.UID); uid != "" {
-			return "workbuddy-" + uid + ".json"
-		}
+	if sa == nil {
+		return authFileName
+	}
+	// UID when the export has one; otherwise the JWT sub. Two credentials with
+	// an empty uid used to share legacy workbuddy.json, and CPA keeps one
+	// account per file, so the second import replaced the first.
+	if uid := sanitizeUIDForFileName(sa.Account.UID); uid != "" {
+		return "workbuddy-" + uid + ".json"
+	}
+	if sub := sanitizeUIDForFileName(jwtSubject(sa.Auth.AccessToken)); sub != "" {
+		return "workbuddy-" + sub + ".json"
 	}
 	return authFileName
 }
@@ -81,13 +91,10 @@ func resolveAuthFileTarget(sa *storedAuth, phys *hostAuthPhysical) (name, path s
 			name = physName
 		}
 		if isLegacyWorkbuddyAuthName(physName) || isLegacyWorkbuddyAuthName(filepath.Base(path)) {
-			if sa != nil && strings.TrimSpace(sa.Account.UID) != "" {
-				// Migrate: write canonical, delete legacy path after save.
+			// Migrate off workbuddy.json once this credential has its own name
+			// (uid or token sub). A still-anonymous credential keeps the legacy file.
+			if !isLegacyWorkbuddyAuthName(name) {
 				legacyPath = path
-				if isLegacyWorkbuddyAuthName(filepath.Base(path)) {
-					// path stays legacy until we write canonical beside it
-				}
-				// After persist to name, remove legacyPath if different.
 			}
 		}
 	}
@@ -604,3 +611,50 @@ func deleteAuthFileInDir(path, dir string) error {
 }
 
 // hostAuthGetFull returns physical JSON, path, and name for an auth index.
+
+// jwtSubject returns the "sub" claim of a JWT access token, or "". The sub is
+// the upstream account ID, so it identifies a credential the same way a UID
+// does even when the export carries no account block.
+func jwtSubject(accessToken string) string {
+	parts := strings.Split(accessToken, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	payload := parts[1]
+	if pad := len(payload) % 4; pad != 0 {
+		payload += strings.Repeat("=", 4-pad)
+	}
+	raw, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Sub string `json:"sub"`
+	}
+	if json.Unmarshal(raw, &claims) != nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.Sub)
+}
+
+// storedIdentityKey is the account identity used to decide whether an import
+// is the same account as an existing one: the UID when present, else the JWT
+// sub, else a digest of the access token. Never the file name — a UID-less
+// credential used to match legacy workbuddy.json and overwrite another account.
+func storedIdentityKey(sa *storedAuth) string {
+	if sa == nil {
+		return ""
+	}
+	if uid := strings.TrimSpace(sa.Account.UID); uid != "" {
+		return "uid:" + uid
+	}
+	if sub := jwtSubject(sa.Auth.AccessToken); sub != "" {
+		return "sub:" + sub
+	}
+	if sa.Auth.AccessToken != "" {
+		sum := sha256.Sum256([]byte(sa.Auth.AccessToken))
+		return "token:" + hex.EncodeToString(sum[:12])
+	}
+	return ""
+}
+

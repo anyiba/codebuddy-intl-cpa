@@ -71,7 +71,7 @@ var (
 // identityFor returns the client identity the account's realm expects: the IDE
 // channel for Intl accounts, the CLI channel for CN (and legacy) accounts.
 func identityFor(sa *storedAuth) string {
-	if sa != nil && isGlobalDomain(sa.Auth.Domain) {
+	if authIsGlobal(sa) {
 		return "IDE"
 	}
 	return "CLI"

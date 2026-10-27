@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 
@@ -184,6 +185,29 @@ func TestToAuthDataForRefresh_EmptyFileNameAndID(t *testing.T) {
 	var nested map[string]any
 	if err := json.Unmarshal(ad.StorageJSON, &nested); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func tokenWithSub(sub string) string {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"` + sub + `"}`))
+	return "h." + payload + ".s"
+}
+
+// Two exports with an empty uid must not share workbuddy.json. That file is one
+// account, so the second import used to replace the first.
+func TestAuthFileName_EmptyUIDUsesTokenSubject(t *testing.T) {
+	a := &storedAuth{Auth: storedTokens{AccessToken: tokenWithSub("acct-a")}}
+	b := &storedAuth{Auth: storedTokens{AccessToken: tokenWithSub("acct-b")}}
+	fa, fb := authFileNameFor(a), authFileNameFor(b)
+	if fa == authFileName || fb == authFileName || fa == fb {
+		t.Fatalf("files %q and %q must be two distinct per-account names", fa, fb)
+	}
+	if storedIdentityKey(a) == storedIdentityKey(b) {
+		t.Fatal("different token subjects must not count as the same account")
+	}
+	again := toAuthData(a)
+	if again.FileName != fa || again.ID == providerName {
+		t.Fatalf("import identity FileName=%q ID=%q", again.FileName, again.ID)
 	}
 }
 

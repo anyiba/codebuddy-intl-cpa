@@ -54,10 +54,22 @@ func normalizeDomainHost(domain string) string {
 	return strings.TrimSuffix(strings.TrimSpace(host), ".")
 }
 
-// accountRegion returns "cn" or "global" based on the auth's domain field.
-// Empty domain (legacy auth files) defaults to "cn" for backward compat.
+// authIsGlobal reports the account realm. A set domain wins. An empty domain
+// (flat exports omit it) falls back to the access-token issuer, so a Global
+// token is not billed against the CN host. No domain and no Global token stays CN.
+func authIsGlobal(sa *storedAuth) bool {
+	if sa == nil {
+		return false
+	}
+	if strings.TrimSpace(sa.Auth.Domain) != "" {
+		return isGlobalDomain(sa.Auth.Domain)
+	}
+	return isGlobalToken(sa.Auth.AccessToken)
+}
+
+// accountRegion returns "cn" or "global".
 func accountRegion(sa *storedAuth) string {
-	if sa != nil && isGlobalDomain(sa.Auth.Domain) {
+	if authIsGlobal(sa) {
 		return "global"
 	}
 	return "cn"
@@ -82,7 +94,7 @@ func setBillingBaseGlobal(s string) func() {
 // CN accounts → https://www.codebuddy.cn; Global → https://www.workbuddy.ai.
 // Falls back to the test-overridable billingBase for CN/nil.
 func billingBaseFor(sa *storedAuth) string {
-	if sa != nil && isGlobalDomain(sa.Auth.Domain) {
+	if authIsGlobal(sa) {
 		return billingBaseGlobal
 	}
 	return billingBase

@@ -38,16 +38,24 @@ func handleImportAuth(req pluginapi.ManagementRequest) map[string]any {
 	if err != nil {
 		return map[string]any{"success": false, "error": "host.auth.list: " + err.Error()}
 	}
+	// identity is the account ID, never the file name: a credential with no UID
+	// falls back to the JWT sub, else to a digest of the access token. Matching
+	// by file name alone made every UID-less import target legacy workbuddy.json
+	// and overwrite whatever account was already there.
+	identity := storedIdentityKey(sa)
+	wantName := authFileNameFor(sa)
 	var existingEntry *pluginapi.HostAuthFileEntry
-	identities := []string{sa.Account.UID, auth.FileName}
+	identities := []string{identity, sa.Account.UID, wantName}
 	for i := range files {
 		f := &files[i]
-		matched := strings.EqualFold(strings.TrimSpace(f.Name), auth.FileName) ||
-			strings.EqualFold(strings.TrimSpace(f.ID), auth.FileName) ||
-			(sa.Account.UID != "" && listEntryMatchesUID(*f, sa.Account.UID, auth.FileName))
-		if !matched && sa.Account.UID != "" && f.AuthIndex != "" {
-			if current, getErr := hostAuthGet(f.AuthIndex); getErr == nil &&
-				strings.EqualFold(strings.TrimSpace(current.Account.UID), strings.TrimSpace(sa.Account.UID)) {
+		matched := !isLegacyWorkbuddyAuthName(wantName) &&
+			(strings.EqualFold(strings.TrimSpace(f.Name), wantName) ||
+				strings.EqualFold(strings.TrimSpace(f.ID), wantName) ||
+				(sa.Account.UID != "" && listEntryMatchesUID(*f, sa.Account.UID, wantName)))
+		if !matched && identity != "" && f.AuthIndex != "" {
+			// Compare credentials, not names: UID (when both have one) or the
+			// UID-less identity key.
+			if current, getErr := hostAuthGet(f.AuthIndex); getErr == nil && storedIdentityKey(current) == identity {
 				matched = true
 			}
 		}
@@ -87,20 +95,22 @@ func handleImportAuth(req pluginapi.ManagementRequest) map[string]any {
 	if err != nil {
 		return map[string]any{"success": false, "error": err.Error()}
 	}
-	saveResp, err := hostAuthSaveJSONResponse(auth.FileName, fileJSON)
+	saveResp, err := hostAuthSaveJSONResponse(wantName, fileJSON)
 	if err != nil {
 		return map[string]any{"success": false, "error": err.Error()}
 	}
 	if saveResp.Name == "" {
-		saveResp.Name = auth.FileName
+		saveResp.Name = wantName
 	}
 	if saveResp.Path == "" && existing != nil {
 		saveResp.Path = existing.Path
 	}
 	// When a UID-bearing legacy file was matched, canonicalize it only after
 	// the new save succeeds. Directory confinement keeps the cleanup bounded.
+	// Only a file that IS the same account is removed: a differently named
+	// file may hold another account (never delete it for a new import).
 	if existing != nil && isLegacyWorkbuddyAuthName(existing.Name) &&
-		!strings.EqualFold(existing.Name, auth.FileName) && existing.Path != "" {
+		!strings.EqualFold(existing.Name, wantName) && existing.Path != "" {
 		_ = deleteAuthFileInDir(existing.Path, filepath.Dir(existing.Path))
 	}
 	return map[string]any{
